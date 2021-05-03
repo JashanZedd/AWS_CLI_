@@ -20,7 +20,8 @@ import sys
 import mock
 import nose
 from awscli.compat import six
-from botocore.vendored.requests import models
+from botocore import xform_name
+from botocore.awsrequest import AWSResponse
 from botocore.exceptions import NoCredentialsError
 from botocore.compat import OrderedDict
 import botocore.model
@@ -37,6 +38,9 @@ from awscli.customizations.commands import BasicCommand
 from awscli import formatter
 from awscli.argparser import HELP_BLURB
 from botocore.hooks import HierarchicalEmitter
+from botocore.configprovider import create_botocore_default_config_mapping
+from botocore.configprovider import ConfigChainFactory
+from botocore.configprovider import ConfigValueStore
 
 
 GET_DATA = {
@@ -64,7 +68,6 @@ GET_DATA = {
                 "metavar": "profile_name"
             },
             "region": {
-                "choices": "{provider}/_regions",
                 "metavar": "region_name"
             },
             "endpoint-url": {
@@ -197,6 +200,15 @@ class FakeSession(object):
         self.profile = None
         self.stream_logger_args = None
         self.credentials = 'fakecredentials'
+        self.session_vars = {}
+        self.config_store = self._register_config_store()
+
+    def _register_config_store(self):
+        chain_builder = ConfigChainFactory(session=self)
+        config_store = ConfigValueStore(
+            mapping=create_botocore_default_config_mapping(chain_builder)
+        )
+        return config_store
 
     def register(self, event_name, handler):
         self.emitter.register(event_name, handler)
@@ -213,6 +225,8 @@ class FakeSession(object):
     def get_component(self, name):
         if name == 'event_emitter':
             return self.emitter
+        if name == 'config_store':
+            return self.config_store
 
     def create_client(self, *args, **kwargs):
         client = mock.Mock()
@@ -227,7 +241,9 @@ class FakeSession(object):
         return GET_DATA[name]
 
     def get_config_variable(self, name):
-        return GET_VARIABLE[name]
+        if name in GET_VARIABLE:
+            return GET_VARIABLE[name]
+        return self.session_vars[name]
 
     def get_service_model(self, name, api_version=None):
         return botocore.model.ServiceModel(
@@ -245,6 +261,8 @@ class FakeSession(object):
     def set_config_variable(self, name, value):
         if name == 'profile':
             self.profile = value
+        else:
+            self.session_vars[name] = value
 
 
 class FakeCommand(BasicCommand):
@@ -269,39 +287,40 @@ class FakeCommandVerify(FakeCommand):
 class TestCliDriver(unittest.TestCase):
     def setUp(self):
         self.session = FakeSession()
+        self.driver = CLIDriver(session=self.session)
 
     def test_session_can_be_passed_in(self):
-        driver = CLIDriver(session=self.session)
-        self.assertEqual(driver.session, self.session)
+        self.assertEqual(self.driver.session, self.session)
 
     def test_paginate_rc(self):
-        driver = CLIDriver(session=self.session)
-        rc = driver.main('s3 list-objects --bucket foo'.split())
+        rc = self.driver.main('s3 list-objects --bucket foo'.split())
         self.assertEqual(rc, 0)
 
     def test_no_profile(self):
-        driver = CLIDriver(session=self.session)
-        driver.main('s3 list-objects --bucket foo'.split())
-        self.assertEqual(driver.session.profile, None)
+        self.driver.main('s3 list-objects --bucket foo'.split())
+        self.assertEqual(self.driver.session.profile, None)
 
     def test_profile(self):
+        self.driver.main('s3 list-objects --bucket foo --profile foo'.split())
+        self.assertEqual(self.driver.session.profile, 'foo')
+
+    def test_region_is_set_for_session(self):
         driver = CLIDriver(session=self.session)
-        driver.main('s3 list-objects --bucket foo --profile foo'.split())
-        self.assertEqual(driver.session.profile, 'foo')
+        driver.main('s3 list-objects --bucket foo --region us-east-2'.split())
+        self.assertEqual(
+            driver.session.get_config_variable('region'), 'us-east-2')
 
     def test_error_logger(self):
-        driver = CLIDriver(session=self.session)
-        driver.main('s3 list-objects --bucket foo --profile foo'.split())
+        self.driver.main('s3 list-objects --bucket foo --profile foo'.split())
         expected = {'log_level': logging.ERROR, 'logger_name': 'awscli'}
-        self.assertEqual(driver.session.stream_logger_args[1], expected)
+        self.assertEqual(self.driver.session.stream_logger_args[1], expected)
 
     def test_ctrl_c_is_handled(self):
-        driver = CLIDriver(session=self.session)
         fake_client = mock.Mock()
         fake_client.list_objects.side_effect = KeyboardInterrupt
         fake_client.can_paginate.return_value = False
-        driver.session.create_client = mock.Mock(return_value=fake_client)
-        rc = driver.main('s3 list-objects --bucket foo'.split())
+        self.driver.session.create_client = mock.Mock(return_value=fake_client)
+        rc = self.driver.main('s3 list-objects --bucket foo'.split())
         self.assertEqual(rc, 130)
 
     def test_error_unicode(self):
@@ -313,17 +332,25 @@ class TestCliDriver(unittest.TestCase):
         else:
             stderr = stderr_b = six.StringIO()
             stderr.encoding = "UTF-8"
-        driver = CLIDriver(session=self.session)
         fake_client = mock.Mock()
         fake_client.list_objects.side_effect = Exception(u"☃")
         fake_client.can_paginate.return_value = False
-        driver.session.create_client = mock.Mock(return_value=fake_client)
+        self.driver.session.create_client = mock.Mock(return_value=fake_client)
         with mock.patch("sys.stderr", stderr):
             with mock.patch("locale.getpreferredencoding", lambda: "UTF-8"):
-                rc = driver.main('s3 list-objects --bucket foo'.split())
+                rc = self.driver.main('s3 list-objects --bucket foo'.split())
         stderr.flush()
         self.assertEqual(rc, 255)
         self.assertEqual(stderr_b.getvalue().strip(), u"☃".encode("UTF-8"))
+
+    def test_can_access_subcommand_table(self):
+        table = self.driver.subcommand_table
+        self.assertEqual(list(table), self.session.get_available_services())
+
+    def test_can_access_argument_table(self):
+        arg_table = self.driver.arg_table
+        expected = list(GET_DATA['cli']['options'])
+        self.assertEqual(list(arg_table), expected)
 
 
 class TestCliDriverHooks(unittest.TestCase):
@@ -717,8 +744,7 @@ class TestHowClientIsCreated(BaseAWSCommandParamsTest):
         self.endpoint = self.create_endpoint.return_value
         self.endpoint.host = 'https://example.com'
         # Have the endpoint give a dummy empty response.
-        http_response = models.Response()
-        http_response.status_code = 200
+        http_response = AWSResponse(None, 200, {}, None)
         self.endpoint.make_request.return_value = (
             http_response, {})
 
@@ -796,29 +822,6 @@ class TestHowClientIsCreated(BaseAWSCommandParamsTest):
         self.assertEqual(call_args[1]['timeout'], (90, 70))
 
 
-class TestHTTPParamFileDoesNotExist(BaseAWSCommandParamsTest):
-
-    def setUp(self):
-        super(TestHTTPParamFileDoesNotExist, self).setUp()
-        self.stderr = six.StringIO()
-        self.stderr_patch = mock.patch('sys.stderr', self.stderr)
-        self.stderr_patch.start()
-
-    def tearDown(self):
-        super(TestHTTPParamFileDoesNotExist, self).tearDown()
-        self.stderr_patch.stop()
-
-    def test_http_file_param_does_not_exist(self):
-        error_msg = ("Error parsing parameter '--filters': "
-                     "Unable to retrieve http://does/not/exist.json: "
-                     "received non 200 status code of 404")
-        with mock.patch('botocore.vendored.requests.get') as get:
-            get.return_value.status_code = 404
-            self.assert_params_for_cmd(
-                'ec2 describe-instances --filters http://does/not/exist.json',
-                expected_rc=255, stderr_contains=error_msg)
-
-
 class TestVerifyArgument(BaseAWSCommandParamsTest):
     def setUp(self):
         super(TestVerifyArgument, self).setUp()
@@ -870,6 +873,17 @@ class TestServiceCommand(unittest.TestCase):
         self.session = FakeSession()
         self.cmd = ServiceCommand(self.name, self.session)
 
+    def test_can_access_subcommand_table(self):
+        table = self.cmd.subcommand_table
+        expected = [
+            xform_name(op, '-') for op in
+            self.session.get_service_model(self.name).operation_names
+        ]
+        self.assertEqual(set(table), set(expected))
+
+    def test_can_access_arg_table(self):
+        self.assertEqual(self.cmd.arg_table, {})
+
     def test_name(self):
         self.assertEqual(self.cmd.name, self.name)
         self.cmd.name = 'bar'
@@ -906,11 +920,20 @@ class TestServiceCommand(unittest.TestCase):
 
 class TestServiceOperation(unittest.TestCase):
     def setUp(self):
-        self.name = 'foo'
-        operation = mock.Mock(spec=botocore.model.OperationModel)
-        operation.deprecated = False
+        self.name = 'list-objects'
+        self.session = FakeSession()
+        operation = self.session.get_service_model(
+            's3').operation_model('ListObjects')
         self.mock_operation = operation
-        self.cmd = ServiceOperation(self.name, None, None, operation, None)
+        self.cmd = ServiceOperation(self.name, None, None, operation,
+                                    self.session)
+
+    def test_can_access_subcommand_table(self):
+        self.assertEqual(self.cmd.subcommand_table, {})
+
+    def test_can_access_arg_table(self):
+        self.assertEqual(set(self.cmd.arg_table),
+                         set(['bucket', 'marker', 'max-keys']))
 
     def test_name(self):
         self.assertEqual(self.cmd.name, self.name)
@@ -924,7 +947,7 @@ class TestServiceOperation(unittest.TestCase):
         self.assertEqual(self.cmd.lineage, [cmd])
 
     def test_lineage_names(self):
-        self.assertEqual(self.cmd.lineage_names, ['foo'])
+        self.assertEqual(self.cmd.lineage_names, ['list-objects'])
 
     def test_deprecated_operation(self):
         self.mock_operation.deprecated = True

@@ -73,47 +73,12 @@ ARGUMENT_RENAMES = {
     'eks.create-cluster.version': 'kubernetes-version',
 }
 
-# Same format as ARGUMENT_RENAMES, but instead of renaming the arguments,
-# an alias is created to the original arugment and marked as undocumented.
-# This is useful when you need to change the name of an argument but you
-# still need to support the old argument.
-HIDDEN_ALIASES = {
-    'cognito-identity.create-identity-pool.open-id-connect-provider-arns':
-        'open-id-connect-provider-ar-ns',
-    'storagegateway.describe-tapes.tape-arns': 'tape-ar-ns',
-    'storagegateway.describe-tape-archives.tape-arns': 'tape-ar-ns',
-    'storagegateway.describe-vtl-devices.vtl-device-arns': 'vtl-device-ar-ns',
-    'storagegateway.describe-cached-iscsi-volumes.volume-arns': 'volume-ar-ns',
-    'storagegateway.describe-stored-iscsi-volumes.volume-arns': 'volume-ar-ns',
-    'route53domains.view-billing.start-time': 'start',
-    # These come from the xform_name() changes that no longer separates words
-    # by numbers.
-    'deploy.create-deployment-group.ec2-tag-set': 'ec-2-tag-set',
-    'deploy.list-application-revisions.s3-bucket': 's-3-bucket',
-    'deploy.list-application-revisions.s3-key-prefix': 's-3-key-prefix',
-    'deploy.update-deployment-group.ec2-tag-set': 'ec-2-tag-set',
-    'iam.enable-mfa-device.authentication-code1': 'authentication-code-1',
-    'iam.enable-mfa-device.authentication-code2': 'authentication-code-2',
-    'iam.resync-mfa-device.authentication-code1': 'authentication-code-1',
-    'iam.resync-mfa-device.authentication-code2': 'authentication-code-2',
-    'importexport.get-shipping-label.street1': 'street-1',
-    'importexport.get-shipping-label.street2': 'street-2',
-    'importexport.get-shipping-label.street3': 'street-3',
-    'lambda.publish-version.code-sha256': 'code-sha-256',
-    'lightsail.import-key-pair.public-key-base64': 'public-key-base-64',
-    'opsworks.register-volume.ec2-volume-id': 'ec-2-volume-id',
-}
-
 
 def register_arg_renames(cli):
     for original, new_name in ARGUMENT_RENAMES.items():
         event_portion, original_arg_name = original.rsplit('.', 1)
         cli.register('building-argument-table.%s' % event_portion,
                      rename_arg(original_arg_name, new_name))
-    for original, new_name in HIDDEN_ALIASES.items():
-        event_portion, original_arg_name = original.rsplit('.', 1)
-        cli.register('building-argument-table.%s' % event_portion,
-                     hidden_alias(original_arg_name, new_name))
 
 
 def rename_arg(original_arg_name, new_name):
@@ -121,10 +86,3 @@ def rename_arg(original_arg_name, new_name):
         if original_arg_name in argument_table:
             utils.rename_argument(argument_table, original_arg_name, new_name)
     return _rename_arg
-
-
-def hidden_alias(original_arg_name, alias_name):
-    def _alias_arg(argument_table, **kwargs):
-        if original_arg_name in argument_table:
-            utils.make_hidden_alias(argument_table, original_arg_name, alias_name)
-    return _alias_arg
