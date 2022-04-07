@@ -19,6 +19,8 @@ import logging
 import distro
 import botocore.session
 from botocore import xform_name
+from botocore.endpoint import DEFAULT_TIMEOUT
+from botocore.config import Config
 from botocore.compat import copy_kwargs, OrderedDict
 from botocore.history import get_global_history_recorder
 from botocore.configprovider import InstanceVarProvider
@@ -61,7 +63,6 @@ from awscli.autoprompt.core import AutoPromptDriver
 from awscli.errorhandler import (
     construct_cli_error_handlers_chain, construct_entry_point_handlers_chain
 )
-
 
 LOG = logging.getLogger('awscli.clidriver')
 LOG_FORMAT = (
@@ -153,6 +154,14 @@ def no_pager_handler(session, parsed_args, **kwargs):
             'pager', ConstantProvider(value=None)
         )
 
+def _update_default_client_config(session, arg_name, arg_value):
+    # Update in the default client config so that the timeout will be used
+    # by all clients created from then on.
+    current_default_config = session.get_default_client_config()
+    new_default_config = Config(**{arg_name: arg_value})
+    if current_default_config is not None:
+        new_default_config = current_default_config.merge(new_default_config)
+    session.set_default_client_config(new_default_config)
 
 class AWSCLIEntryPoint:
     def __init__(self, driver=None):
@@ -181,6 +190,8 @@ class AWSCLIEntryPoint:
         driver = self._driver
         if driver is None:
             driver = create_clidriver(args)
+        # Before processing the cli args, timeouts are set
+        driver._set_connect_and_read_timeout()
         autoprompt_driver = AutoPromptDriver(driver)
         auto_prompt_mode = autoprompt_driver.resolve_mode(args)
         if auto_prompt_mode == 'on':
@@ -239,6 +250,14 @@ class CLIDriver(object):
         config_store.set_config_provider(
             'cli_auto_prompt',
             self._construct_cli_auto_prompt_chain()
+        )
+        config_store.set_config_provider(
+            'connect_timeout',
+            self._construct_connect_timeout()
+        )
+        config_store.set_config_provider(
+            'read_timeout',
+            self._construct_read_timeout()
         )
 
     def _construct_cli_region_chain(self):
@@ -326,6 +345,48 @@ class CLIDriver(object):
             ConstantProvider(value='off'),
         ]
         return ChainProvider(providers=providers)
+
+    def _construct_connect_timeout(self):
+        providers = [
+            EnvironmentProvider(
+                name='AWS_CONNECT_TIMEOUT',
+                env=os.environ,
+            ),
+            ScopedConfigProvider(
+                config_var_name='connect_timeout',
+                session=self.session,
+            ),
+            ConstantProvider(value=DEFAULT_TIMEOUT),
+        ]
+        return ChainProvider(providers=providers)
+
+    def _construct_read_timeout(self):
+        providers = [
+            EnvironmentProvider(
+                name='AWS_READ_TIMEOUT',
+                env=os.environ,
+            ),
+            ScopedConfigProvider(
+                config_var_name='read_timeout',
+                session=self.session,
+            ),
+            ConstantProvider(value=DEFAULT_TIMEOUT),
+        ]
+        return ChainProvider(providers=providers)
+
+    def _set_connect_and_read_timeout(self):
+        config_store = self.session.get_component('config_store')
+        self._set_timeout_from_providers("connect_timeout", config_store)
+        self._set_timeout_from_providers("read_timeout", config_store)
+
+    def _set_timeout_from_providers(self, timeout_arg, config_store):
+        timeout = config_store.get_config_variable(timeout_arg)
+        timeout = int(timeout)
+        if timeout == 0:
+            timeout = None
+        LOG.debug("%s timeout from providers: %s", timeout_arg, timeout)
+        _update_default_client_config(self.session, timeout_arg, timeout)
+        
 
     @property
     def subcommand_table(self):
