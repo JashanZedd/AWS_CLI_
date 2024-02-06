@@ -19,6 +19,7 @@ from prompt_toolkit.application import Application
 from prompt_toolkit.completion import Completer, ThreadedCompleter
 from prompt_toolkit.completion import Completion
 from prompt_toolkit.document import Document
+from prompt_toolkit.output.color_depth import ColorDepth
 
 from awscli.logger import LOG_FORMAT, disable_crt_logging
 from awscli.autocomplete import parser
@@ -57,7 +58,8 @@ class PromptToolkitPrompter:
     """Handles the actual prompting in the autoprompt workflow.
 
     """
-    def __init__(self, completion_source, driver, completer=None,
+
+    def __init__(self, completion_source, driver, session, completer=None,
                  factory=None, app=None, cli_parser=None, output=None,
                  app_input=None):
         self._completion_source = completion_source
@@ -78,14 +80,15 @@ class PromptToolkitPrompter:
         self.input_buffer = None
         self.doc_buffer = None
         self.output_buffer = None
-        if app is None:
-            app = self.create_application()
-        self.app = app
         self._args = []
         self._driver = driver
         self._docs_getter = DocsGetter(self._driver)
         self._output_getter = OutputGetter(self._driver)
-
+        self._session=session   
+        if app is None:
+            app = self.create_application()
+        self.app = app
+        
     def args(self, value):
         self._args = value
 
@@ -107,9 +110,15 @@ class PromptToolkitPrompter:
         return input_buffer_container, doc_window, output_window
 
     def create_application(self):
+        # There are four different levels of color depths available in python-prompt-toolkit, 
+        # which can be used to configure different color schemes in aws cli. You can read more
+        # about it in the documentation linked below:
+        # https://python-prompt-toolkit.readthedocs.io/en/master/pages/advanced_topics/styling.html?highlight=classes#color-depths
+        cli_color_depth = {"black_and_white": ColorDepth.MONOCHROME, "ansi_colors": ColorDepth.ANSI_COLORS_ONLY,"256_colors": ColorDepth.DEFAULT, "true_colors": ColorDepth.TRUE_COLOR}
+        depth_level = self._session.get_config_variable('color_palette')
+        depth_level = depth_level if depth_level else "256_colors"
         self._create_buffers()
-        input_buffer_container, \
-                doc_window, output_window = self._create_containers()
+        input_buffer_container, doc_window, output_window = self._create_containers()
         layout = self._factory.create_layout(
             on_input_buffer_text_changed=self.update_bottom_buffers_text,
             input_buffer_container=input_buffer_container,
@@ -119,7 +128,7 @@ class PromptToolkitPrompter:
         kb = kb_manager.keybindings
         app = Application(layout=layout, key_bindings=kb, full_screen=False,
                           output=self._output, erase_when_done=True,
-                          input=self._input)
+                          input=self._input, color_depth=cli_color_depth[depth_level])
         self._set_app_defaults(app)
         return app
 
@@ -240,6 +249,7 @@ class PromptToolkitCompleter(Completer):
     `prompt_toolkit.Completion` objects.
 
     """
+
     def __init__(self, completion_source):
         self._completion_source = completion_source
 
