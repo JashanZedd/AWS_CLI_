@@ -3417,7 +3417,9 @@ class JSONFileCache:
     values can be retrieved at a later time.
     """
 
-    CACHE_DIR = os.path.expanduser(os.path.join('~', '.aws', 'boto', 'cache'))
+    CACHE_DIR = os.path.expanduser(
+        os.getenv('AWS_BOTO_CACHE_DIR', os.path.join('~', '.aws', 'boto', 'cache'))
+    )
 
     def __init__(self, working_dir=CACHE_DIR, dumps_func=None):
         self._working_dir = working_dir
