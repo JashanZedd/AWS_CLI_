@@ -33,8 +33,10 @@ EXAMPLES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 GLOBAL_OPTIONS_FILE = os.path.join(EXAMPLES_DIR, 'global_options.rst')
 GLOBAL_OPTIONS_SYNOPSIS_FILE = os.path.join(EXAMPLES_DIR,
                                             'global_synopsis.rst')
-
-
+# Global constants for document sections
+DESCRIPTION = 'Desription'
+SYNOPSIS = 'Synopsis'
+OPTIONS = 'Options'
 class CLIDocumentEventHandler(object):
 
     def __init__(self, help_command):
@@ -44,11 +46,12 @@ class CLIDocumentEventHandler(object):
         self._documented_arg_groups = []
 
     def _build_arg_table_groups(self, help_command):
+        """ Builds a dictionary of argument groups for the given help command."""
         arg_groups = {}
         for arg in help_command.arg_table.values():
             if arg.group_name is not None:
                 arg_groups.setdefault(arg.group_name, []).append(arg)
-        return arg_groups
+        return arg_groups 
 
     def _get_argument_type_name(self, shape, default):
         if is_json_value_header(shape):
@@ -81,8 +84,11 @@ class CLIDocumentEventHandler(object):
         handler method will be registered for the all events of
         that type for the specified ``event_class``.
         """
-        self._map_handlers(session, event_class, session.register)
-
+        try:
+           self._map_handlers(session, event_class, session.register)
+        except Exception as e:
+              LOG.debug("Error registering event handlers for %s: %s",
+                        event_class, e, exc_info=True) 
     def unregister(self):
         """
         The default unregister iterates through all of the
@@ -122,14 +128,14 @@ class CLIDocumentEventHandler(object):
 
     def doc_description(self, help_command, **kwargs):
         doc = help_command.doc
-        doc.style.h2('Description')
-        doc.include_doc_string(help_command.description)
+        doc.style.h2(DESCRIPTION) # Replace local constants with global constants
+        doc.include_doc_string(help_command.description) 
         doc.style.new_paragraph()
 
     def doc_synopsis_start(self, help_command, **kwargs):
         self._documented_arg_groups = []
         doc = help_command.doc
-        doc.style.h2('Synopsis')
+        doc.style.h2(SYNOPSIS) # Replace local constants with global constants
         doc.style.start_codeblock()
         doc.writeln('%s' % help_command.name)
 
@@ -165,36 +171,19 @@ class CLIDocumentEventHandler(object):
 
     def doc_options_start(self, help_command, **kwargs):
         doc = help_command.doc
-        doc.style.h2('Options')
+        doc.style.h2(OPTIONS)  # Replace local constants with global constants
         if not help_command.arg_table:
             doc.write('*None*\n')
-
     def doc_option(self, arg_name, help_command, **kwargs):
         doc = help_command.doc
         argument = help_command.arg_table[arg_name]
-        if argument.group_name in self._arg_groups:
-            if argument.group_name in self._documented_arg_groups:
-                # This arg is already documented so we can move on.
-                return
-            name = ' | '.join(
-                ['``%s``' % a.cli_name for a in
-                 self._arg_groups[argument.group_name]])
-            self._documented_arg_groups.append(argument.group_name)
-        else:
-            name = '``%s``' % argument.cli_name
-        doc.write('%s (%s)\n' % (name, self._get_argument_type_name(
-            argument.argument_model, argument.cli_type_name)))
-        doc.style.indent()
-        doc.include_doc_string(argument.documentation)
-        if is_streaming_blob_type(argument.argument_model):
-            self._add_streaming_blob_note(doc)
-        if is_tagged_union_type(argument.argument_model):
-            self._add_tagged_union_note(argument.argument_model, doc)
-        if hasattr(argument, 'argument_model'):
-            self._document_enums(argument.argument_model, doc)
-            self._document_nested_structure(argument.argument_model, doc)
+        self._document_arg_group(argument, doc)
+        self._document_individual_arg(argument, doc)
+        self._add_notes(argument, doc)
+        self._document_model(argument, doc)
         doc.style.dedent()
-        doc.style.new_paragraph()
+        doc.style.new_paragraph() 
+   
 
     def doc_global_option(self, help_command, **kwargs):
         doc = help_command.doc
@@ -295,7 +284,7 @@ class CLIDocumentEventHandler(object):
                "(e.g. ``path/to/file``) and must **not** "
                "be prefixed with ``file://`` or ``fileb://``")
         doc.writeln(msg)
-        doc.style.end_note()
+        doc.style.end_note() 
 
     def _add_tagged_union_note(self, shape, doc):
         doc.style.start_note()
@@ -307,7 +296,8 @@ class CLIDocumentEventHandler(object):
         doc.writeln(msg)
         doc.style.end_note()
 
-
+# Global constants for document sections
+SYNOPSIS = 'Synopsis'
 class ProviderDocumentEventHandler(CLIDocumentEventHandler):
 
     def doc_breadcrumbs(self, help_command, event_name, **kwargs):
@@ -315,7 +305,7 @@ class ProviderDocumentEventHandler(CLIDocumentEventHandler):
 
     def doc_synopsis_start(self, help_command, **kwargs):
         doc = help_command.doc
-        doc.style.h2('Synopsis')
+        doc.style.h2(SYNOPSIS) # Replace local constants with global constants
         doc.style.codeblock(help_command.synopsis)
         doc.include_doc_string(help_command.help_usage)
 
@@ -343,6 +333,8 @@ class ProviderDocumentEventHandler(CLIDocumentEventHandler):
         doc.style.tocitem(command_name, file_name=file_name)
 
 
+#Global constants for document sections
+DESCRIPTION = 'Description'
 class ServiceDocumentEventHandler(CLIDocumentEventHandler):
 
     # A service document has no synopsis.
@@ -374,7 +366,7 @@ class ServiceDocumentEventHandler(CLIDocumentEventHandler):
     def doc_description(self, help_command, **kwargs):
         doc = help_command.doc
         service_model = help_command.obj
-        doc.style.h2('Description')
+        doc.style.h2(DESCRIPTION) # Replace local constants with global constants
         # TODO: need a documentation attribute.
         doc.include_doc_string(service_model.documentation)
 
@@ -396,7 +388,9 @@ class ServiceDocumentEventHandler(CLIDocumentEventHandler):
         else:
             doc.style.tocitem(command_name)
 
-
+#Global constants for document sections
+DESCRIPTION = 'Description'
+OUTPUT = 'Output'
 class OperationDocumentEventHandler(CLIDocumentEventHandler):
 
     AWS_DOC_BASE = 'https://docs.aws.amazon.com/goto/WebAPI'
@@ -404,7 +398,7 @@ class OperationDocumentEventHandler(CLIDocumentEventHandler):
     def doc_description(self, help_command, **kwargs):
         doc = help_command.doc
         operation_model = help_command.obj
-        doc.style.h2('Description')
+        doc.style.h2(DESCRIPTION) # Replace local constants with global constants
         doc.include_doc_string(operation_model.documentation)
         self._add_webapi_crosslink(help_command)
         self._add_note_for_document_types_if_used(help_command)
@@ -597,7 +591,7 @@ class OperationDocumentEventHandler(CLIDocumentEventHandler):
 
     def doc_output(self, help_command, event_name, **kwargs):
         doc = help_command.doc
-        doc.style.h2('Output')
+        doc.style.h2(OUTPUT) # Replace local constants with global constants
         operation_model = help_command.obj
         output_shape = operation_model.output_shape
         if output_shape is None or not output_shape.members:
@@ -606,7 +600,8 @@ class OperationDocumentEventHandler(CLIDocumentEventHandler):
             for member_name, member_shape in output_shape.members.items():
                 self._doc_member(doc, member_name, member_shape, stack=[])
 
-
+#Global constants for document sections
+DESCRIPTION = 'Description'
 class TopicListerDocumentEventHandler(CLIDocumentEventHandler):
     DESCRIPTION = (
         'This is the AWS CLI Topic Guide. It gives access to a set '
@@ -639,7 +634,7 @@ class TopicListerDocumentEventHandler(CLIDocumentEventHandler):
 
     def doc_description(self, help_command, **kwargs):
         doc = help_command.doc
-        doc.style.h2('Description')
+        doc.style.h2(DESCRIPTION) # Replace local constants with global constants
         doc.include_doc_string(self.DESCRIPTION)
         doc.style.new_paragraph()
 
